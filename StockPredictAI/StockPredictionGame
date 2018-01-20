@@ -1,0 +1,4 @@
+import time
+
+print "Welcome to the Stock Prediction game"
+time.sleep(3) # Delay for 3 seconds.
