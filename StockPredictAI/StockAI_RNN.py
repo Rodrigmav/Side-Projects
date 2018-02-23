@@ -1,3 +1,6 @@
+## DataSet
+import quandl
+
 ## Keras for deep learning
 from keras.layers.core import Dense, Activation, Dropout
 from keras.layers.recurrent import LSTM
@@ -40,7 +43,9 @@ def load_data(filename, sequence_length):
     window_size -- An integer that represents how many days of X values the model can look at at once
     """
     #Read the data file
-    raw_data = pd.read_csv(filename, dtype = float).values
+    raw_data = quandl.get("BCHARTS/ABUCOINSUSD")
+   
+    
     
     #Change all zeros to the number before the zero occurs
     for x in range(0, raw_data.shape[0]):
@@ -168,36 +173,226 @@ def fit_model(model, X_train, Y_train, batch_num, num_epoch, val_split):
 
 ##### Step 4 ######### Testing the Model #################
 
-def fit_model(model, X_train, Y_train, batch_num, num_epoch, val_split):
+def test_model(model, X_test, Y_test, unnormalized_bases):
     """
-    Fits the model to the training data
+    Test the model on the testing data
     
     Arguments:
-    model -- The previously initalized 3 layer Recurrent Neural Network
-    X_train -- A tensor of shape (2400, 49, 35) that represents the x values of the training data
-    Y_train -- A tensor of shape (2400,) that represents the y values of the training data
-    batch_num -- An integer representing the batch size to be used, in this case 1024
-    num_epoch -- An integer defining the number of epochs to be run, in this case 100
-    val_split -- A decimal representing the proportion of training data to be used as validation data
+    model -- The previously fitted 3 layer Recurrent Neural Network
+    X_test -- A tensor of shape (267, 49, 35) that represents the x values of the testing data
+    Y_test -- A tensor of shape (267,) that represents the y values of the testing data
+    unnormalized_bases -- A tensor of shape (267,) that can be used to get unnormalized data points
     
     Returns:
-    model -- The 3 layer Recurrent Neural Network that has been fitted to the training data
-    training_time -- An integer representing the amount of time (in seconds) that the model was training
+    y_predict -- A tensor of shape (267,) that represnts the normalized values that the model predicts based on X_test
+    real_y_test -- A tensor of shape (267,) that represents the actual prices of bitcoin throughout the testing period
+    real_y_predict -- A tensor of shape (267,) that represents the model's predicted prices of bitcoin
+    fig -- A branch of the graph of the real predicted prices of bitcoin versus the real prices of bitcoin
     """
-    #Record the time the model starts training
-    start = time.time()
+    #Test the model on X_Test
+    y_predict = model.predict(X_test)
 
-    #Train the model on X_train and Y_train
-    model.fit(X_train, Y_train, batch_size= batch_num, nb_epoch=num_epoch, validation_split= val_split)
+    #Create empty 2D arrays to store unnormalized values
+    real_y_test = np.zeros_like(Y_test)
+    real_y_predict = np.zeros_like(y_predict)
 
-    #Get the time it took to train the model (in seconds)
-    training_time = int(math.floor(time.time() - start))
-    return model, training_time
+    #Fill the 2D arrays with the real value and the predicted value by reversing the normalization process
+    for i in range(Y_test.shape[0]):
+        y = Y_test[i]
+        predict = y_predict[i]
+        real_y_test[i] = (y+1)*unnormalized_bases[i]
+        real_y_predict[i] = (predict+1)*unnormalized_bases[i]
 
+    #Plot of the predicted prices versus the real prices
+    fig = plt.figure(figsize=(10,5))
+    ax = fig.add_subplot(111)
+    ax.set_title("Bitcoin Price Over Time")
+    plt.plot(real_y_predict, color = 'green', label = 'Predicted Price')
+    plt.plot(real_y_test, color = 'red', label = 'Real Price')
+    ax.set_ylabel("Price (USD)")
+    ax.set_xlabel("Time (Days)")
+    ax.legend()
+    
+    return y_predict, real_y_test, real_y_predict, fig
 
+##### Step 5 ############ Evaluating change in price ###################
+def price_change(Y_daybefore, Y_test, y_predict):
+    """
+    Calculate the percent change between each value and the day before
+    
+    Arguments:
+    Y_daybefore -- A tensor of shape (267,) that represents the prices of each day before each price in Y_test
+    Y_test -- A tensor of shape (267,) that represents the normalized y values of the testing data
+    y_predict -- A tensor of shape (267,) that represents the normalized y values of the model's predictions
+    
+    Returns:
+    Y_daybefore -- A tensor of shape (267, 1) that represents the prices of each day before each price in Y_test
+    Y_test -- A tensor of shape (267, 1) that represents the normalized y values of the testing data
+    delta_predict -- A tensor of shape (267, 1) that represents the difference between predicted and day before values
+    delta_real -- A tensor of shape (267, 1) that represents the difference between real and day before values
+    fig -- A plot representing percent change in bitcoin price per day,
+    """
+    #Reshaping Y_daybefore and Y_test
+    Y_daybefore = np.reshape(Y_daybefore, (-1, 1))
+    Y_test = np.reshape(Y_test, (-1, 1))
 
+    #The difference between each predicted value and the value from the day before
+    delta_predict = (y_predict - Y_daybefore) / (1+Y_daybefore)
 
+    #The difference between each true value and the value from the day before
+    delta_real = (Y_test - Y_daybefore) / (1+Y_daybefore)
 
+    #Plotting the predicted percent change versus the real percent change
+    fig = plt.figure(figsize=(10, 6))
+    ax = fig.add_subplot(111)
+    ax.set_title("Percent Change in Bitcoin Price Per Day")
+    plt.plot(delta_predict, color='green', label = 'Predicted Percent Change')
+    plt.plot(delta_real, color='red', label = 'Real Percent Change')
+    plt.ylabel("Percent Change")
+    plt.xlabel("Time (Days)")
+    ax.legend()
+    plt.show()
+    
+    return Y_daybefore, Y_test, delta_predict, delta_real, fig
 
+##### Step 6 #########
 
+def binary_price(delta_predict, delta_real):
+    """
+    Converts percent change to a binary 1 or 0, where 1 is an increase and 0 is a decrease/no change
+    
+    Arguments:
+    delta_predict -- A tensor of shape (267, 1) that represents the predicted percent change in price
+    delta_real -- A tensor of shape (267, 1) that represents the real percent change in price
+    
+    Returns:
+    delta_predict_1_0 -- A tensor of shape (267, 1) that represents the binary version of delta_predict
+    delta_real_1_0 -- A tensor of shape (267, 1) that represents the binary version of delta_real
+    """
+    #Empty arrays where a 1 represents an increase in price and a 0 represents a decrease in price
+    delta_predict_1_0 = np.empty(delta_predict.shape)
+    delta_real_1_0 = np.empty(delta_real.shape)
 
+    #If the change in price is greater than zero, store it as a 1
+    #If the change in price is less than zero, store it as a 0
+    for i in range(delta_predict.shape[0]):
+        if delta_predict[i][0] > 0:
+            delta_predict_1_0[i][0] = 1
+        else:
+            delta_predict_1_0[i][0] = 0
+    for i in range(delta_real.shape[0]):
+        if delta_real[i][0] > 0:
+            delta_real_1_0[i][0] = 1
+        else:
+            delta_real_1_0[i][0] = 0    
+
+    return delta_predict_1_0, delta_real_1_0
+
+##### Step 7 ######### 
+
+def find_positives_negatives(delta_predict_1_0, delta_real_1_0):
+    """
+    Finding the number of false positives, false negatives, true positives, true negatives
+    
+    Arguments: 
+    delta_predict_1_0 -- A tensor of shape (267, 1) that represents the binary version of delta_predict
+    delta_real_1_0 -- A tensor of shape (267, 1) that represents the binary version of delta_real
+    
+    Returns:
+    true_pos -- An integer that represents the number of true positives achieved by the model
+    false_pos -- An integer that represents the number of false positives achieved by the model
+    true_neg -- An integer that represents the number of true negatives achieved by the model
+    false_neg -- An integer that represents the number of false negatives achieved by the model
+    """
+    #Finding the number of false positive/negatives and true positives/negatives
+    true_pos = 0
+    false_pos = 0
+    true_neg = 0
+    false_neg = 0
+    for i in range(delta_real_1_0.shape[0]):
+        real = delta_real_1_0[i][0]
+        predicted = delta_predict_1_0[i][0]
+        if real == 1:
+            if predicted == 1:
+                true_pos += 1
+            else:
+                false_neg += 1
+        elif real == 0:
+            if predicted == 0:
+                true_neg += 1
+            else:
+                false_pos += 1
+    return true_pos, false_pos, true_neg, false_neg
+
+##### Step 8 ####### 
+
+def calculate_statistics(true_pos, false_pos, true_neg, false_neg, y_predict, Y_test):
+    """
+    Calculate various statistics to assess performance
+    
+    Arguments:
+    true_pos -- An integer that represents the number of true positives achieved by the model
+    false_pos -- An integer that represents the number of false positives achieved by the model
+    true_neg -- An integer that represents the number of true negatives achieved by the model
+    false_neg -- An integer that represents the number of false negatives achieved by the model
+    Y_test -- A tensor of shape (267, 1) that represents the normalized y values of the testing data
+    y_predict -- A tensor of shape (267, 1) that represents the normalized y values of the model's predictions
+    
+    Returns:
+    precision -- How often the model gets a true positive compared to how often it returns a positive
+    recall -- How often the model gets a true positive compared to how often is hould have gotten a positive
+    F1 -- The weighted average of recall and precision
+    Mean Squared Error -- The average of the squares of the differences between predicted and real values
+    """
+    precision = float(true_pos) / (true_pos + false_pos)
+    recall = float(true_pos) / (true_pos + false_neg)
+    F1 = float(2 * precision * recall) / (precision + recall)
+    #Get Mean Squared Error
+    MSE = mean_squared_error(y_predict.flatten(), Y_test.flatten())
+
+    return precision, recall, F1, MSE
+
+##### Step 9 ##### 
+X_train, Y_train, X_test, Y_test, Y_daybefore, unnormalized_bases, window_size = load_data("Bitcoin Data.csv", 50)
+print (X_train.shape)
+print (Y_train.shape)
+print (X_test.shape)
+print (Y_test.shape)
+print (Y_daybefore.shape)
+print (unnormalized_bases.shape)
+print (window_size)
+
+##### Step 10 ####### 
+model = initialize_model(window_size, 0.2, 'linear', 'mse', 'adam')
+print (model.summary())
+
+##### Step 11 #######
+model, training_time = fit_model(model, X_train, Y_train, 1024, 100, .05)
+
+#Print the training time
+print ("Training time", training_time, "seconds")
+
+# Testing Model ####
+y_predict, real_y_test, real_y_predict, fig1 = test_model(model, X_test, Y_test, unnormalized_bases)
+
+#Show the plot
+plt.show(fig1)
+
+delta_predict_1_0, delta_real_1_0 = binary_price(delta_predict, delta_real)
+
+print delta_predict_1_0.shape
+print delta_real_1_0.shape
+
+# Comparing Predictions and true data ####
+true_pos, false_pos, true_neg, false_neg = find_positives_negatives(delta_predict_1_0, delta_real_1_0)
+print ("True positives:", true_pos)
+print ("False positives:", false_pos)
+print ("True negatives:", true_neg)
+print ("False negatives:", false_neg)
+
+# Getting Stats ######
+precision, recall, F1, MSE = calculate_statistics(true_pos, false_pos, true_neg, false_neg, y_predict, Y_test)
+print ("Precision:", precision)
+print ("Recall:", recall)
+print ("F1 score:", F1)
+print ("Mean Squared Error:", MSE)
